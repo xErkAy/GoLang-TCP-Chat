@@ -19,7 +19,7 @@ func handleClient(connection net.Conn) {
 	var user User
 
 	for {
-		data := make([]byte, 4096)
+		data := make([]byte, 32768)
 		_, err := connection.Read(data)
 		if err != nil {
 			break
@@ -38,39 +38,79 @@ func handleClient(connection net.Conn) {
 			Registration(&chat, connection)
 			break
 		} else if chat.Type == "logout" {
-			SendMessage(chat, connection)
+			LogInOrOut(data, connection)
 			break
+		} else if chat.Type == "login" {
+			go LogInOrOut(data, connection)
 		} else if chat.Type == "message" {
-			fmt.Println(chat)
 			go SendMessage(chat, connection)
+		} else if chat.Type == "file_message" {
+			go SendFileMessage(chat, connection)
 		}
 	}
 
 	go RemoveUser(user)
 }
 
-func SendMessage(chat Chat, connection net.Conn) {
-	if chat.Type == "logout" {
-		for _, element := range users {
-			if element.Connection != connection {
-				message := fmt.Sprintf(`{"type": "logoutMessage", "message": { "text": "%s disconnected from the server!" } }`, chat.Username)
-				element.Connection.Write([]byte(message))
-				fmt.Println(message)
-			}
+func LogInOrOut(data []byte, connection net.Conn) {
+	message := string(bytes.Trim(data, "'\x00'"))
+	fmt.Println(message)
+	for _, element := range users {
+		if element.Connection != connection {
+			element.Connection.Write([]byte(message))
 		}
-	} else if chat.Message.Reciever == "" {
+	}
+}
+
+func SendMessage(chat Chat, connection net.Conn) {
+	if chat.Message.Reciever == "" {
+		message := fmt.Sprintf(`{"username": "%s", "type": "message", "message": {"text": "%s", "time": "%s"}}`, chat.Username, chat.Message.Text, chat.Message.Time)
+		fmt.Println(message)
 		for _, element := range users {
 			if element.Connection != connection {
-				message := fmt.Sprintf(`{"type": "globalMessage", "message": { "text": "%s" } }`, chat.Message.Text)
 				element.Connection.Write([]byte(message))
-				fmt.Println(message)
 			}
 		}
 	} else {
 		for _, element := range users {
 			if element.Username == chat.Message.Reciever {
-				message := fmt.Sprintf(`{"type": "privateMessage", "message": { "text": "%s", "sender": "%s" } }`, chat.Message.Text, chat.Username)
-				element.Connection.Write([]byte(message))
+				element.Connection.Write([]byte(fmt.Sprintf(`{"username": "%s", "type": "private_message", "message": {"text": "%s", "time": "%s"}}`, chat.Username, chat.Message.Text, chat.Message.Time)))
+			}
+		}
+	}
+}
+
+func SendFileMessage(chat Chat, connection net.Conn) {
+	if chat.File.Type == "file_data" {
+		if chat.Message.Reciever == "" {
+			message := fmt.Sprintf(`{"username": "%s", "type": "file_data", "file_name": "%s", "data": "%s"}`, chat.Username, chat.File.FileName, chat.File.Data)
+			fmt.Println(message)
+			for _, element := range users {
+				if element.Connection != connection {
+					element.Connection.Write([]byte(message))
+				}
+			}
+		} else {
+			for _, element := range users {
+				if element.Username == chat.File.Reciever {
+					element.Connection.Write([]byte(fmt.Sprintf(`{"username": "%s", "type": "private_file_data", "file_name": "%s", "data": "%s"}`, chat.Username, chat.File.FileName, chat.File.Data)))
+				}
+			}
+		}
+	} else if chat.File.Type == "end_file_sending" {
+		if chat.Message.Reciever == "" {
+			message := fmt.Sprintf(`{"username": "%s", "type": "end_file_sending", "file_name": "%s"}`, chat.Username, chat.File.FileName)
+			fmt.Println(message)
+			for _, element := range users {
+				if element.Connection != connection {
+					element.Connection.Write([]byte(message))
+				}
+			}
+		} else {
+			for _, element := range users {
+				if element.Username == chat.Message.Reciever {
+					element.Connection.Write([]byte(fmt.Sprintf(`{"username": "%s", "type": "end_file_sending", "file_name": "%s"}`, chat.Username, chat.File.FileName)))
+				}
 			}
 		}
 	}

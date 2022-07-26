@@ -10,10 +10,20 @@ type Chat struct {
 
 	ID      int      `json:"id"`
 	Message *Message `json:"message"`
+	File    *File    `json:"file"`
 }
 
 type Message struct {
 	Text     string `json:"text"`
+	Time     string `json:"time"`
+	Reciever string `json:"reciever_username"`
+}
+
+type File struct {
+	Type     string `json:"type"`
+	FileName string `json:"file_name"`
+	Data     string `json:"data"`
+	Time     string `json:"time"`
 	Reciever string `json:"reciever_username"`
 }
 
