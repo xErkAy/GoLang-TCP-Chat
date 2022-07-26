@@ -6,6 +6,7 @@ import configparser
 import os.path
 import os
 import json
+import base64
 import re
 import main_gui
 import auth_gui
@@ -19,61 +20,70 @@ from threading import Thread
 from PyQt6 import QtWidgets
 from PyQt6.QtWidgets import *
 from cryptography.fernet import Fernet
+from base64 import b64encode, b64decode
+from Cryptodome.Cipher import AES
+from Cryptodome.Random import get_random_bytes
 from PyQt6.QtGui import QIcon, QDesktopServices
 
 users_response = []
 
 
-class Authentication(QtWidgets.QMainWindow, auth_gui.Ui_MainWindow):
+class Auth(QtWidgets.QMainWindow, auth_gui.Ui_MainWindow):
     def __init__(self):
-        super(Authentication, self).__init__()
+        super(Auth, self).__init__()
         self.setWindowIcon(QIcon("icon.ico"))
         self.setupUi(self)
-        self.key = "nLsAq81xXqmU7hF"
-        self.init_ui()
+        self.init_UI()
 
-    def init_ui(self):
+    def init_UI(self):
+        global auth_key, key, crypt, lastUsedName
         try:
             config = configparser.ConfigParser()
             config.read("settings.ini")
-            last_used_name = config.get("settings", "last_used_name")
-            if last_used_name != "0":
-                self.name.setText(last_used_name)
+            lastUsedName = config.get("settings", "last_used_name")
+            if lastUsedName != "0":
+                self.name.setText(lastUsedName)
         except:
             pass
-        self.log_in.clicked.connect(self.log_in_func)
-        self.name.returnPressed.connect(self.log_in_func)
-        self.password.returnPressed.connect(self.log_in_func)
-        self.sign_up.clicked.connect(self.sign_up_func)
+        self.log_in.clicked.connect(self.Log_in)
+        self.name.returnPressed.connect(self.Log_in)
+        self.password.returnPressed.connect(self.Log_in)
+        self.sign_up.clicked.connect(self.Sign_up)
+        key = "nLsAq81xXqmU7hF"
+        crypt = Fernet(bytes("EXEiyCREoeTdtftxw3-scOfs9GbDqAVfT1eIxXFUwnc=", "utf-8"))
 
-    def generate_hash_password(self):
+    def generateHashPassword(self):
         alphabet = "ab7cdefg!h4ijklmn-opqrstuvwxy_235zABC?DEFGHI.JKLMNOPQRSTUVWXYZ16890"
         result = ""
-        for i in range(40):
+        for i in range(50):
             result += alphabet[random.randint(0, 65)]
-        return hashlib.md5(result.encode()).hexdigest()
+        return hashlib.sha224(
+            hashlib.md5(hashlib.sha512(result.encode()).hexdigest().encode()).hexdigest().encode()).hexdigest()
 
-    def log_in_func(self):
+    def Log_in(self):
+        global client, nick, passEncryptKey
+
         try:
             config = configparser.ConfigParser()
             config.read("settings.ini")
-            self.pass_encrypt_key = config.get("settings", "user_password_encrypt_key")
+            passEncryptKey = config.get("settings", "user_password_encrypt_key")
         except:
             QMessageBox.warning(self, "Error", "Contact your administrator to solve this problem.")
             return
 
-        if self.pass_encrypt_key == "0":
+        if passEncryptKey == "0":
             file = open("settings.ini", "wt")
-            config.set("settings", "user_password_encrypt_key", self.generate_hash_password())
+            config.set("settings", "user_password_encrypt_key", self.generateHashPassword())
             config.write(file)
             file.close()
 
         if not re.search("(\w+)", self.name.text()) or not re.search("(\w+)", self.password.text()):
             QMessageBox.warning(self, "Error", "Enter your username and password.")
             return
+        nick = self.name.text()
 
         file = open("settings.ini", "wt")
-        config.set("settings", "last_used_name", self.name.text())
+        config.set("settings", "last_used_name", nick)
         config.write(file)
         file.close()
 
@@ -86,11 +96,10 @@ class Authentication(QtWidgets.QMainWindow, auth_gui.Ui_MainWindow):
 
         message = {
             "type": "authorization",
-            "username": nick_encrypt(self.name.text()),
-            "password": pass_encrypt(self.password.text(), self.pass_encrypt_key)
+            "username": Security.nick_encrypt(self, nick),
+            "password": Security.pass_encrypt(self, self.password.text(), passEncryptKey)
         }
         client.send(json.dumps(message).encode("utf-8"))
-
         try:
             data = client.recv(1024)
             if data == b'0':
@@ -103,29 +112,29 @@ class Authentication(QtWidgets.QMainWindow, auth_gui.Ui_MainWindow):
             client.close()
             return
 
-        self.chat_app = Chat(self.name.text(), client)
+        self.chat_app = Chat()
         self.close()
         self.chat_app.show()
 
-    def sign_up_func(self):
+    def Sign_up(self):
         try:
             config = configparser.ConfigParser()
             config.read("settings.ini")
-            pass_encrypt_key = config.get("settings", "user_password_encrypt_key")
+            passEncryptKey = config.get("settings", "user_password_encrypt_key")
         except:
             QMessageBox.warning(self, "Error", "Contact your administrator to solve this problem.")
             return
 
+        if passEncryptKey == "0":
+            file = open("settings.ini", "wt")
+            config.set("settings", "user_password_encrypt_key", self.generateHashPassword())
+            config.write(file)
+            file.close()
+            passEncryptKey = config.get("settings", "user_password_encrypt_key")
+
         if not re.search("(\w+)", self.name.text()) or not re.search("(\w+)", self.password.text()):
             QMessageBox.warning(self, "Error", "Enter your name and password.")
             return
-
-        if pass_encrypt_key == "0":
-            self.pass_encrypt_key = self.generate_hash_password()
-            file = open("settings.ini", "wt")
-            config.set("settings", "user_password_encrypt_key", self.pass_encrypt_key)
-            config.write(file)
-            file.close()
 
         try:
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -136,58 +145,52 @@ class Authentication(QtWidgets.QMainWindow, auth_gui.Ui_MainWindow):
 
         message = {
             "type": "registration",
-            "username": nick_encrypt(self.name.text()),
-            "password": pass_encrypt(self.password.text(), self.pass_encrypt_key)
+            "username": Security.nick_encrypt(self, self.name.text()),
+            "password": Security.pass_encrypt(self, self.password.text(), passEncryptKey)
         }
         client.send(json.dumps(message).encode("utf-8"))
         try:
             data = client.recv(1024)
             if data == b'1':
                 QMessageBox.information(self, "Success", "The user has been created.")
+                client.close()
             elif data == b'0':
                 QMessageBox.warning(self, "Error", "This user already exists."
                                                    "\nTry to use a different name.")
+                client.close()
         except:
             QMessageBox.warning(self, "Error", "The connection has been failed.")
-        client.close()
+            client.close()
 
 
 class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
-    def __init__(self, username, client):
+    def __init__(self):
         super(Chat, self).__init__()
-        self.username = username
-        self.client = client
         self.setWindowIcon(QIcon("icon.ico"))
-        self.setupUi(self, "Chat [" + username + "]")
-        self.init_ui()
+        self.setupUi(self, "Chat [" + nick + "]")
+        self.init_UI()
 
-    def init_ui(self):
-        self.sendbutton.clicked.connect(self.send_text)
-        self.sendbutton_1.clicked.connect(self.send_file)
-        self.audio_message.clicked.connect(self.audio_message_window)
-        self.users_online.clicked.connect(self.send_pm_message)
-        self.sendText.returnPressed.connect(self.send_text)
-        self.settings.clicked.connect(self.settings_window)
+    def init_UI(self):
+        self.sendbutton.clicked.connect(self.SendText)
+        self.sendbutton_1.clicked.connect(self.SendFile)
+        self.audio_message.clicked.connect(self.AudioMessageWindow)
+        self.users_online.clicked.connect(self.SendPMMessage)
+        self.sendText.returnPressed.connect(self.SendText)
+        self.settings.clicked.connect(self.SettingsWindow)
         self.messages.anchorClicked.connect(QDesktopServices.openUrl)
 
-        message = {
-            "type": "login",
-            "message": {
-                "text": self.username + " connected to the server!",
-            }
-        }
-        self.client.send(json.dumps(message).encode("utf-8"))
+        client.send((nick + " connected to the server!").encode("utf-8"))
         self.messages.append("<html>You connected to the server.</html>")
         self.messages.repaint()
 
         loop = Thread(target=self.chat_updating, daemon=True)
         loop.start()
 
-    def audio_message_window(self):
+    def AudioMessageWindow(self):
         self.audio_message_app = AudioMessage("")
         self.audio_message_app.show()
 
-    def settings_window(self):
+    def SettingsWindow(self):
         self.settings_app = Settings()
         self.settings_app.show()
 
@@ -196,25 +199,38 @@ class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
             message = {
                 "type": "logout",
                 "message": {
-                    "text": self.username + " disconnected from the server!",
+                    "text": nick + " disconnected from the server!",
                 }
             }
-            self.client.send(json.dumps(message).encode("utf-8"))
-            self.client.close()
+            client.send(json.dumps(message).encode("utf-8"))
+            client.close()
         except:
             pass
         event.accept()
         exit(0)
 
-    def send_pm_message(self):
+    def SendPMMessage(self):
+        global nick_sendto
         nick_sendto = self.users_online.selectedIndexes()[0].data()
-        if nick_sendto == "Users online:" or nick_sendto == self.username:
+        if nick_sendto == "Users online:" or nick_sendto == "admin" or nick_sendto == nick or nick == "admin":
             return
+        if nick_sendto in users_response:
+            client.send(("/acceptPM " + Security.nick_encrypt(self, nick_sendto) + " " + str(
+                crypt.encrypt(Security.dictTobytes(self, Security.encrypt_AES(self, nick))), "utf-8")).encode("utf-8"))
+            users_response.remove(nick_sendto)
+            AcceptPMStatus = 1
+        else:
+            client.send(("/startPM " + Security.nick_encrypt(self, nick_sendto) + " " + str(
+                crypt.encrypt(Security.dictTobytes(self, Security.encrypt_AES(self, nick))), "utf-8")).encode("utf-8"))
+            AcceptPMStatus = 0
 
-        self.pm_message_app = PMMessages(self.client, nick_sendto)
-        self.pm_message_app.show()
+        self.pmmessage_app = PMMessages(AcceptPMStatus, nick_sendto)
+        self.pmmessage_app.show()
 
-    def send_text(self):
+    def SendText(self):
+        global kickedORbanned
+        if kickedORbanned:
+            return
         if not re.search("(\w+)", self.sendText.text()):
             self.sendText.clear()
             return
@@ -225,107 +241,182 @@ class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
         try:
             self.messages.append("<html>[" + time.strftime("%H:%M:%S") + "] You: " + self.sendText.text() + "</html>")
             message = {
-                "username": self.username,
+                "username": nick,
                 "type": "message",
                 "message": {
-                    "text": str(crypt.encrypt(bytes(self.sendText.text(), encoding="utf-8")), encoding="utf-8"),
-                    "time": str(crypt.encrypt(bytes(time.strftime("%H:%M:%S"), encoding="utf-8")), encoding="utf-8")
+                    "text": str(crypt.encrypt(Security.dictTobytes(self, Security.encrypt_AES(self, "[" +
+                                                                                              time.strftime(
+                                                                                                  "%H:%M:%S") + "] " + nick + ": " + self.sendText.text()))),
+                                "utf-8"),
                 }
             }
-            self.client.send(json.dumps(message).encode("utf-8"))
+            client.send(json.dumps(message).encode("utf-8"))
         except:
             pass
         self.sendText.clear()
 
-    def send_file(self):
+    def SendFile(self):
         selectedfile = QFileDialog.getOpenFileName(self, "Open file", "C:\\", "Any file (*)")
         if selectedfile[0] == "":
             return
 
         if os.path.getsize(selectedfile[0]) > 1073741824:
-            QMessageBox.warning(self, "Error", "Your file is too big. (max = 1 gb)")
+            QMessageBox.warning(self, "Error", "Your file is too big. (max = 1 Gb)")
             return
 
-        file_path = selectedfile[0]
         file_name = os.path.split(selectedfile[0])[1]
-
-        self.messages.append(f'<html>[{time.strftime("%H:%M:%S")}] You sent a file - {file_name}.</html>')
-
-        file_name = str(crypt.encrypt(file_name.encode()), encoding="utf-8")
-
-        file = open(file_path, "rb")
-        data = file.read(32768)
-        message = {
-            "username": self.username,
-            "type": "file_message",
-            "file": {
-                "type": "file_data",
-                "file_name": file_name,
-                "data": str(crypt.encrypt(data), encoding="utf-8")
-            }
-        }
-        while data:
-            time.sleep(0.3)
-            self.client.send(json.dumps(message).encode("utf-8"))
-            data = file.read(32768)
-            message = {
-                "username": self.username,
-                "type": "file_message",
-                "file": {
-                    "type": "file_data",
-                    "file_name": file_name,
-                    "data": str(crypt.encrypt(data), encoding="utf-8")
-                }
-            }
-        file.close()
-
+        client.send(("/startfilesending " + file_name).encode("utf-8"))
         time.sleep(0.5)
 
-        message = {
-            "username": self.username,
-            "type": "file_message",
-            "file": {
-                "type": "end_file_sending",
-                "file_name": file_name,
-            }
-        }
-        self.client.send(json.dumps(message).encode("utf-8"))
+        fileData = open(selectedfile[0], "rb")
+        data = fileData.read(32768)
+        while data:
+            client.send(data)
+            data = fileData.read(32768)
+        fileData.close()
+
+        time.sleep(0.2)
+        client.send(b"/endfilesending")
+
+        time.sleep(0.5)
+        client.send(("/afterfilemessage " + str(crypt.encrypt(Security.dictTobytes(self, Security.encrypt_AES(self, "["
+                                                                                                              + time.strftime(
+            "%H:%M:%S") + "] " + nick + " sent a file - " + file_name + "."))), "utf-8")).encode("utf-8"))
+        self.messages.append("<html>[" + time.strftime("%H:%M:%S") + "] You sent a file - " + file_name + ".</html>")
 
     def chat_updating(self):
+        global changePassStatus, file_path, nick_sendto, allowPM, newPMMessage, kickedORbanned
+        kickedORbanned = 0
+        changePassStatus = 0
+        allowPM = 0
+        newPMMessage = ""
         while True:
             try:
-                data = self.client.recv(32768)
-                data = json.loads(data.decode("utf-8"))
-
-                if data.get("type") == "login" or data.get("type") == "logout":
-                    self.messages.append(f'<html>{data.get("message").get("text")}</html>')
-
-                elif data.get("type") == "message":
-                    time = crypt.decrypt((data.get("message").get("time")).encode()).decode()
-                    text = crypt.decrypt((data.get("message").get("text")).encode()).decode()
-                    self.messages.append(f'<html>[{time}] {data.get("username")}: {text}</html>')
-
-                elif data.get("type") == "file_data":
-                    file_name = crypt.decrypt((data.get("file_name")).encode()).decode()
-                    with open("data/" + file_name, "wb") as file:
-                        file.write(crypt.decrypt(data.get("data").encode()))
-
-                elif data.get("type") == "end_file_sending":
-                    import time
-                    file_name = crypt.decrypt((data.get("file_name")).encode()).decode()
-                    file_path = os.path.abspath(f"data/{file_name}").replace("\\", "/")
-                    link = f"<a href = 'file:///{file_path}'>Open.</a>"
-                    self.messages.append(f'<html>[{time.strftime("%H:%M:%S")}] {data.get("username")} sent a file - {file_name}. {link}</html>')
-
+                data = client.recv(32768)
+                print(data)
+                if "/changepassword" in data.decode("utf-8"):
+                    if "/changepassword 1" in data.decode("utf-8"):
+                        changePassStatus = 1
+                    elif "/changepassword 0" in data.decode("utf-8"):
+                        changePassStatus = 0
+                elif "/usersOnline" in data.decode("utf-8"):
+                    self.users_online.clear()
+                    [self.users_online.addItem(i) for i in
+                     re.search("/usersOnline (.*)", data.decode("utf-8")).group(1).split("|")]
+                elif "/startfilesending" in data.decode("utf-8"):
+                    file_path = os.getcwd().replace("\\", "/") + "/data/" + re.search(
+                        "/startfilesending (.*)", data.decode("utf-8")).group(1)
+                    recievedfile = open(file_path, "wb")
+                    while True:
+                        data = client.recv(32768)
+                        if data == b"/endfilesending":
+                            recievedfile.close()
+                            break
+                        recievedfile.write(data)
+                elif "/privatestartfilesending" in data.decode("utf-8"):
+                    file_path = os.getcwd().replace("\\", "/") + "/data/" + re.search(
+                        "/privatestartfilesending (.*)", data.decode("utf-8")).group(1)
+                    recievedfile = open(file_path, "wb")
+                    while True:
+                        data = client.recv(32768)
+                        if data == b"/endfilesending":
+                            recievedfile.close()
+                            break
+                        recievedfile.write(data)
+                elif "/myaudiomessage" in data.decode("utf-8"):
+                    self.messages.append("<html>" + Security.decrypt_AES(self, Security.bytesTodict(self, bytes(
+                        crypt.decrypt(bytes(re.search("/myaudiomessage (.*)", data.decode("utf-8")).group(1),
+                                            encoding='utf8'))))) + "</html>")
+                elif "/audiomessage" in data.decode("utf-8"):
+                    try:
+                        self.messages.append("<html>" + Security.decrypt_AES(self, Security.bytesTodict(self, bytes(
+                            crypt.decrypt(bytes(re.search("/audiomessage (.*)", data.decode("utf-8")).group(1),
+                                                encoding='utf8'))))) + " <a href = 'file:///" + file_path + "'>Listen.</a></html>")
+                    except:
+                        pass
+                elif "/afterfilemessage" in data.decode("utf-8"):
+                    try:
+                        self.messages.append("<html>" + Security.decrypt_AES(self, Security.bytesTodict(self, bytes(
+                            crypt.decrypt(bytes(re.search("/afterfilemessage (.*)", data.decode("utf-8")).group(1),
+                                                encoding='utf8'))))) +
+                                             " <a href = 'file:///" + file_path + "'>Open.</a></html>")
+                    except:
+                        pass
+                elif "/message" in data.decode("utf-8"):
+                    try:
+                        self.messages.append("<html>" + Security.decrypt_AES(self, Security.bytesTodict(self,
+                                                                                                        bytes(
+                                                                                                            crypt.decrypt(
+                                                                                                                bytes(
+                                                                                                                    re.search(
+                                                                                                                        "/message (.*)",
+                                                                                                                        data.decode(
+                                                                                                                            "utf-8")).group(
+                                                                                                                        1),
+                                                                                                                    encoding='utf8'))))) + "</html>")
+                    except:
+                        pass
+                elif "/startPM" in data.decode("utf-8"):
+                    try:
+                        users_response.append(Security.decrypt_AES(self, Security.bytesTodict(self,
+                                                                                              bytes(crypt.decrypt(bytes(
+                                                                                                  re.search(
+                                                                                                      "/startPM (.*)",
+                                                                                                      data.decode(
+                                                                                                          "utf-8")).group(
+                                                                                                      1),
+                                                                                                  encoding='utf8'))))))
+                        self.messages.append("<html>" + Security.decrypt_AES(self, Security.bytesTodict(self,
+                                                                                                        bytes(
+                                                                                                            crypt.decrypt(
+                                                                                                                bytes(
+                                                                                                                    re.search(
+                                                                                                                        "/startPM (.*)",
+                                                                                                                        data.decode(
+                                                                                                                            "utf-8")).group(
+                                                                                                                        1),
+                                                                                                                    encoding='utf8'))))) + " wants to send you a message.</html>")
+                    except:
+                        pass
+                elif "/acceptPM" in data.decode("utf-8"):
+                    try:
+                        if nick_sendto == Security.decrypt_AES(self, Security.bytesTodict(self, bytes(crypt.decrypt(
+                                bytes(re.search("/acceptPM (.*)", data.decode("utf-8")).group(1), encoding='utf8'))))):
+                            allowPM = 1
+                    except:
+                        pass
+                elif "/cancelPM" in data.decode("utf-8"):
+                    try:
+                        users_response.remove(Security.decrypt_AES(self, Security.bytesTodict(self, bytes(crypt.decrypt(
+                            bytes(re.search("/cancelPM (.*)", data.decode("utf-8")).group(1), encoding='utf8'))))))
+                    except:
+                        pass
+                elif "/pm" in data.decode("utf-8") or "/endPM" in data.decode(
+                        "utf-8") or "/privateafterfilemessage" in data.decode(
+                        "utf-8") or "/privateaudiomessage" in data.decode(
+                        "utf-8") or "/privatemyaudiomessage" in data.decode("utf-8"):
+                    newPMMessage = data.decode("utf-8")
+                elif "/kick" in data.decode("utf-8") or "/ban" in data.decode("utf-8"):
+                    kickedORbanned = 1
+                    self.sendbutton.setEnabled(0)
+                    self.sendbutton_1.setEnabled(0)
+                    self.audio_message.setEnabled(0)
+                    self.users_online.setEnabled(0)
+                    client.send((nick + " disconnected from the server!").encode("utf-8"))
+                    client.close()
+                    self.messages.append(
+                        "<html>[" + time.strftime("%H:%M:%S") + "] You have been kicked by admin.</html>")
+                    break
             except:
                 pass
 
 
 class PMMessages(QtWidgets.QMainWindow, pms.Ui_MainWindow):
-    def __init__(self, client, nick_sendto):
+    def __init__(self, AcceptPMStatus, nick_sendto):
         super(PMMessages, self).__init__()
-        self.client = client
         self.nick_sendto = nick_sendto
+        self.AcceptPMStatus = AcceptPMStatus
+        self.status = 0
         self.setWindowIcon(QIcon("icon.ico"))
         self.setupUi(self, "Chat with [" + nick_sendto + "]")
         self.init_ui()
@@ -381,7 +472,7 @@ class PMMessages(QtWidgets.QMainWindow, pms.Ui_MainWindow):
             pass
         self.sendText.clear()
 
-    def send_file(self):
+    def SendFile(self):
         selectedfile = QFileDialog.getOpenFileName(self, "Open file", "C:\\", "Any file (*)")
         if selectedfile[0] == "":
             return
@@ -408,9 +499,6 @@ class PMMessages(QtWidgets.QMainWindow, pms.Ui_MainWindow):
             crypt.encrypt(Security.dictTobytes(self, Security.encrypt_AES(self, "[" + time.strftime(
                 "%H:%M:%S") + "] " + nick + " sent a file - " + file_name + "."))), "utf-8")).encode("utf-8"))
         self.messages.append("<html>[" + time.strftime("%H:%M:%S") + "] You sent a file - " + file_name + ".</html>")
-
-    def send_file_loop(self):
-        pass
 
     def chat_updating(self):
         global allowPM, newPMMessage
@@ -638,16 +726,58 @@ class Settings(QtWidgets.QMainWindow, settings.Ui_MainWindow):
         QMessageBox.information(self, "Success", "Cache cleared.")
 
 
-def nick_encrypt(text):
-    return hashlib.sha512(text.encode()).hexdigest()
+class Security:
+    def dictTobytes(self, text):
+        return base64.b64encode(str(text).encode('ascii'))
+
+    def bytesTodict(self, text):
+        ascii_msg = base64.b64decode(text).decode('ascii')
+        ascii_msg = ascii_msg.replace("'", "\"")
+        return json.loads(ascii_msg)
+
+    def encrypt_AES(self, text):
+        salt = get_random_bytes(AES.block_size)
+        private_key = hashlib.scrypt(
+            key.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+        cipher_config = AES.new(private_key, AES.MODE_GCM)
+        cipher_text, tag = cipher_config.encrypt_and_digest(bytes(text, 'utf-8'))
+        return {
+            'cipher_text': b64encode(cipher_text).decode('utf-8'),
+            'salt': b64encode(salt).decode('utf-8'),
+            'nonce': b64encode(cipher_config.nonce).decode('utf-8'),
+            'tag': b64encode(tag).decode('utf-8')
+        }
+
+    def decrypt_AES(self, text):
+        salt = b64decode(text['salt'])
+        cipher_text = b64decode(text['cipher_text'])
+        nonce = b64decode(text['nonce'])
+        tag = b64decode(text['tag'])
+        private_key = hashlib.scrypt(
+            key.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+        cipher = AES.new(private_key, AES.MODE_GCM, nonce=nonce)
+        decrypted = cipher.decrypt_and_verify(cipher_text, tag)
+        return bytes.decode(decrypted)
+
+    def nick_encrypt(self, text):
+        return hashlib.md5(hashlib.sha256(hashlib.sha1(hashlib.sha384(hashlib.md5(hashlib.sha512(
+            text.encode()).hexdigest().encode()).hexdigest().encode()).hexdigest().encode()).hexdigest().encode()).
+                           hexdigest().encode()).hexdigest()
+
+    def pass_encrypt(self, text, text1):
+        return hashlib.sha1(hashlib.md5(hashlib.sha224(
+            hashlib.md5(hashlib.sha1(hashlib.sha256(hashlib.md5(hashlib.sha512(hashlib.md5(text.encode()).
+                                                                               hexdigest().encode()).hexdigest().encode()).hexdigest().encode()).hexdigest().encode()).hexdigest().
+                        encode()).hexdigest().encode() + text1.encode()).hexdigest().encode()).hexdigest().encode()).hexdigest()
+
+    def admin_encrypt(self, text, text1):
+        return hashlib.md5(hashlib.sha1(hashlib.sha224(
+            hashlib.sha512(hashlib.md5(hashlib.sha256(hashlib.sha224(hashlib.sha512(hashlib.md5(text.encode()).
+                                                                                    hexdigest().encode()).hexdigest().encode()).hexdigest().encode()).hexdigest().encode()).hexdigest().
+                           encode()).hexdigest().encode() + text1.encode()).hexdigest().encode()).hexdigest().encode()).hexdigest()
 
 
-def pass_encrypt(text, text1):
-    return hashlib.md5(text.encode()).hexdigest() + hashlib.sha224(text1.encode()).hexdigest()
-
-
-crypt = Fernet(bytes("EXEiyCREoeTdtftxw3-scOfs9GbDqAVfT1eIxXFUwnc=", "utf-8"))
 app = QtWidgets.QApplication([])
-auth_app = Authentication()
+auth_app = Auth()
 auth_app.show()
 sys.exit(app.exec())
