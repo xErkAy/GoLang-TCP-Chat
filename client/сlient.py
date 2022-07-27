@@ -20,6 +20,7 @@ from PyQt6 import QtWidgets
 from PyQt6.QtWidgets import *
 from cryptography.fernet import Fernet
 from PyQt6.QtGui import QIcon, QDesktopServices
+from PyQt6.QtCore import QThread, QObject
 
 users_response = []
 
@@ -152,7 +153,7 @@ class Authentication(QtWidgets.QMainWindow, auth_gui.Ui_MainWindow):
         client.close()
 
 
-class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
+class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow, QObject):
     def __init__(self, username, client):
         super(Chat, self).__init__()
         self.username = username
@@ -180,8 +181,8 @@ class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
         self.messages.append("<html>You connected to the server.</html>")
         self.messages.repaint()
 
-        loop = Thread(target=self.chat_updating, daemon=True)
-        loop.start()
+        self.thread = ChatUpdating(messages=self.messages, client=self.client)
+        self.thread.start()
 
     def audio_message_window(self):
         self.audio_message_app = AudioMessage("")
@@ -253,14 +254,27 @@ class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
 
         file_name = str(crypt.encrypt(file_name.encode()), encoding="utf-8")
 
-        file = open(file_path, "rb")
+        self.send_file_thread = SendFileLoop(username=self.username, file_name=file_name, file_path=file_path, client=self.client)
+        self.send_file_thread.start()
+
+class SendFileLoop(QThread):
+
+    def __init__(self, username, file_name, file_path, client):
+        super().__init__()
+        self.username = username
+        self.file_name = file_name
+        self.file_path = file_path
+        self.client = client
+
+    def run(self):
+        file = open(self.file_path, "rb")
         data = file.read(32768)
         message = {
             "username": self.username,
             "type": "file_message",
             "file": {
                 "type": "file_data",
-                "file_name": file_name,
+                "file_name": self.file_name,
                 "data": str(crypt.encrypt(data), encoding="utf-8")
             }
         }
@@ -273,25 +287,33 @@ class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
                 "type": "file_message",
                 "file": {
                     "type": "file_data",
-                    "file_name": file_name,
+                    "file_name": self.file_name,
                     "data": str(crypt.encrypt(data), encoding="utf-8")
                 }
             }
         file.close()
 
-        time.sleep(0.5)
+        time.sleep(0.3)
 
         message = {
             "username": self.username,
             "type": "file_message",
             "file": {
                 "type": "end_file_sending",
-                "file_name": file_name,
+                "file_name": self.file_name,
             }
         }
         self.client.send(json.dumps(message).encode("utf-8"))
 
-    def chat_updating(self):
+
+class ChatUpdating(QThread):
+
+    def __init__(self, messages, client):
+        super().__init__()
+        self.messages = messages
+        self.client = client
+
+    def run(self):
         while True:
             try:
                 data = self.client.recv(32768)
@@ -307,7 +329,7 @@ class Chat(QtWidgets.QMainWindow, main_gui.Ui_MainWindow):
 
                 elif data.get("type") == "file_data":
                     file_name = crypt.decrypt((data.get("file_name")).encode()).decode()
-                    with open("data/" + file_name, "wb") as file:
+                    with open("data/" + file_name, "ab") as file:
                         file.write(crypt.decrypt(data.get("data").encode()))
 
                 elif data.get("type") == "end_file_sending":
